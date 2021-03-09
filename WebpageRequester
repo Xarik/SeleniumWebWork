@@ -1,0 +1,206 @@
+#This is a very rough proof of concept for Selenium and Powershell automation
+#The script has been heavily edited for public sharing but originally was
+#created to submit a request form for users found in active directory.
+#Due to the edited version, this is stricly a proof of concept and displays
+#the possibilities of utilizing Selenium to automate tasks on a webpage where
+#API access may not be possible. 
+
+#Edited 03/2021 for public sharing - Updates needed for README and further information
+#Please contact Lane at lanefschwartz@gmail.com for further information and assistance. 
+
+#making sure we're working in the ISE as it enables further troubleshooting and variable management
+if($psISE -ne $null) {
+}else {
+write-host "Please run this program in the ISE to improve troubleshooting"; break
+}
+
+
+#get info and build the Selenium run space
+#Make sure to adjust your location accordingly
+$PathToFolder = 'C:\Selenium' 
+[System.Reflection.Assembly]::LoadFrom("{0}\WebDriver.dll" -f $PathToFolder)
+if ($env:Path -notcontains ";$PathToFolder" ) {
+    $env:Path += ";$PathToFolder"
+}
+
+#Open Selenium Chrome/FF workspace
+    #If loading Firefox use "Firefoxoptions" (or prefered variable) or "Chromeoptions" if Chrome
+    #Loading this is completely separate of a normal instance of FF and Chrome. 
+$Firefoxoptions = New-Object OpenQA.Selenium.Firefox.Firefoxoptions
+$Firefoxoptions.AddArgument#('-headless') ##Used to make the window not appear, or 'headless'
+$Firefoxoptions.AcceptInsecureCertificates = $True
+$Firefoxdriver = New-Object OpenQA.Selenium.Firefox.Firefoxdriver($Firefoxoptions)
+$new = New-Object OpenQA.Selenium.Firefox.Firefoxdriver($Firefoxoptions)
+#This is adjusted in order to change the 'timeout' of page loading. 
+#I've adjusted mine to 8 seconds to account for webpage lag times and general loading waits. 
+$Firefoxdriver.Manage().Timeouts().ImplicitWait = (new-timespan -seconds 8)
+
+#At this point the webdriver and Selenium workspace are up and running and you can interact with the selenium objects
+#You can also navigate in this window (assuming it's not headless) like any other browser in order to test and view properties/objects through Selenium
+
+
+$Firefoxdriver.Url = 'test.com'
+
+#region - Account request automation
+$list = $null
+$list = Import-Csv 'C:\Users\JohnDoe\Documents\Userlist.csv'
+
+#Example of my list:
+#USERNAME	NAME
+#JDoe	    John Doe
+#LSchwar	Lane Schwart
+
+For ($i=0; $i -le (($list | measure).count - 1); $i += 1){
+    #region user AD lookup
+    foreach ($user in $list[$i]) {
+    #Work in progress attempt at a 'pretty' output
+    if($i -eq 0 ){write-host `n`n`n`n`n`n`n`n`n$("_" * 105) -ForegroundColor white -BackgroundColor black}
+    if($i -gt 0){write-host `n`n`n$("_" * 105) -ForegroundColor white -BackgroundColor black}
+    write-host `n"CREATING ACCOUNT FOR $($user.username.toupper()) - POSITION $($i)" -ForegroundColor White -BackgroundColor DarkGreen
+    write-host `n$("_" * 105) -ForegroundColor white -BackgroundColor black
+
+    #generate information from AD about this user - some error handling, not fully fleshed out
+    write-host "Checking AD for user information" -ForegroundColor White -BackgroundColor DarkGreen
+    #establish checked variables
+    #username
+    $name = "$($user.username)"
+    #Is there an AD entry?
+    $exists = [bool] (get-aduser -filter "sAMAccountName -eq '$name'")
+    #confirm AD entry - If no user account exists, this entry will be skipped
+    if($exists -eq "true"){
+        write-host "$($user.username) exists in AD" -ForegroundColor White -BackgroundColor DarkGreen
+        }
+        else{
+            write-host "Could not find $($user.username) in AD - Skipping this entry" -ForegroundColor White -BackgroundColor Red;continue}
+    
+    #get AD info
+    $account = get-aduser -Identity "$($user.username.ToUpper())" -server "contoso.ad.com"
+    #send useful info to console
+    $account | select -Property enabled,givenname,surname,samaccountname | Out-Default 
+    
+    
+    #NOTE# - A special case resulted in an AD entry that had null variables. This can likely be used, but not by my script. This checks if those null variables exist
+    $result = $account | select -property enabled,givenname,surname,samaccountname | GM | ? -Property definition -like '*null*' 
+
+    #if null variables exist, output them to the console
+    if($result){for($w=0; $w -le (($result | measure).count - 1); $w += 1){write-host "$($result.name[$w]) is `$NULL - Skipping this entry" -ForegroundColor White -BackgroundColor Red};continue}
+    #if null variables exist, skip iteration
+    if($result -ne $null){write-host $result;continue}
+    
+
+    #Assign user sendkey text
+    $accountfullname = ($account.surname.ToUpper()) + " " + ($account.givenname.ToUpper())
+    $accountusername = $account.name.ToUpper()
+    #endregion user AD lookup
+    
+    #region check/setup workspace and URL
+    #enabling verbose for first successful run through - Work in progress
+    #Clear verbose variable if in first iteration
+    if(($i -eq 0) -and ($Verbose)){clear-variable verbose}
+    $verbose++
+    if($verbose -eq 1){$VerbosePreference = "continue"}
+    if(($verbose -gt 1) -and ($i -ne 0)){write-verbose "verbose disabled from iteration $($i) onward" ;$VerbosePreference = "silentlycontinue"}
+    $host.PrivateData.VerboseBackgroundColor = 'gray'
+    $host.PrivateData.VerboseForegroundColor = 'white'
+
+    #load form 
+    $Firefoxdriver.Url = 'test.com'
+
+        #[ignore this] Check the page elements of the URL we're accessing to make sure it's loaded properly 
+        #if a specific element exists, you'll receive a pop up telling you the page is not correct, otherwise it continues.
+        #This is primarily set to check if a user account is signed in for the request page
+            $result = 0
+            if ($firefoxdriver.url.Contains("weblogin") -eq $false){
+                write-host "URL all good - User is signed in" -ForegroundColor White -BackgroundColor DarkGreen
+                }
+                else{
+                    write-host "URL MISMATCH" -ForegroundColor White -BackgroundColor Red
+                    $wshell = New-Object -ComObject Wscript.Shell
+                    $result = $wshell.Popup("Please log in to the displayed page and start this region again",0,"You're not logged in",0x0)}
+            if ($result -eq 1){break}
+    #endregion check/setup workspace and URL
+
+    #region bulk of web work
+    #search for the page header
+        Do {start-sleep -Seconds .5} until ($Firefoxdriver.FindElementByXPath('/html/body/div/section/main/div/div/sp-page-row/div/div[1]/span/div/div/div[1]/div[1]/div/div[1]/h2').displayed -eq $true)
+    #determine if the page header is the one we're looking for. If it's changed, the script may break
+    if ($i -eq 0){
+    $exists = $Firefoxdriver.FindElementByXPath('/html/body/div/section/main/div[1]/div/sp-page-row/div/div[1]/span/div/div/div[1]/div[1]/div/div[1]/h2').text -eq "my page header here"
+    if($exists -eq "true"){write-host "Page header matches description 'my page header here' ###SKIPPING THIS STEP FOR THE REST OF THE SCRIPT###" -ForegroundColor White -BackgroundColor DarkGreen}else{write-host "The page header doesn't match, killing the script" -ForegroundColor White -BackgroundColor Red; break}
+    }
+
+    #Request type drop down
+    Write-Verbose "Testing the dropdown for REQUEST TYPE"
+        Do {start-sleep -Seconds .5} until ($Firefoxdriver.FindElementByXPath('//*[@id="select2-chosen-6"]').Displayed -eq $true)
+    $Firefoxdriver.FindElementByxpath('/html/body/div[1]/section/main/div[1]/div/sp-page-row/div/div[1]/span/div/div/div[1]/div[1]/div/div[3]/form/div/sp-variable-layout/fieldset/div/div/div[2]/div/span/div/a/span[2]/b').Click()
+    #Request selection
+    Write-Verbose "Selecting REQUEST TYPE"
+    $Firefoxdriver.FindElementByXPath('/html/body/div[3]/ul/li[3]').click()
+
+    #send name (last first)
+    Write-Verbose "Sending applicants name"
+        Do {start-sleep -Seconds .5} until ($Firefoxdriver.FindElementByXPath('//*[@id="sp_formfield_requested_for"]').Displayed -eq $true)
+    $Firefoxdriver.FindElementByXPath('//*[@id="sp_formfield_requested_for"]').SendKeys("$accountfullname")
+
+
+    #send Username
+    Write-Verbose "Sending Username"
+        Do {start-sleep -Seconds .5} until ($Firefoxdriver.FindElementByXPath('//*[@id="sp_formfield_v_applicant_username"]').Displayed -eq $true)
+    $Firefoxdriver.FindElementByXPath('//*[@id="sp_formfield_v_applicant_username"]').SendKeys("$($accountusername)")
+
+    #Send Dept
+    Write-Verbose "Selecting the department from the dropdown"
+    $Firefoxdriver.FindElementByXPath('/html/body/div[1]/section/main/div/div/sp-page-row/div/div[1]/span/div/div/div[1]/div[1]/div/div[3]/form/div/sp-variable-layout/fieldset/div/div/div[6]/div/span/span/div/div/a').Click()
+    $Firefoxdriver.FindElementByXPath('/html/body/div[4]/div/input').SendKeys('edplus')
+        start-sleep -Seconds 1
+        Do {start-sleep -Seconds .5} until ($Firefoxdriver.FindElementByXPath('/html/body/div[4]/ul/li[1]/div/div[1]').Displayed -eq $true)
+    $Firefoxdriver.FindElementByXPath('/html/body/div[4]/ul/li[1]/div/div[1]').click()
+
+    #radial button handling
+    Write-Verbose "Selecting radial button 1"
+    $Firefoxdriver.FindElementByXPath('//*[@id="sp_formfield_v_radial_button_1"]').Click()
+    Write-Verbose "Selecting radial button 2"
+    $Firefoxdriver.FindElementByXPath('//*[@id="sp_formfield_v_radial_button_2"]').Click()
+    Write-Verbose "Selecting radial button 3"
+    $Firefoxdriver.FindElementByXPath('//*[@id="sp_formfield_v_radial_button_3"]').Click()
+
+    #Fill in textbox info
+    Write-Verbose "Entering textbox info"
+    $Firefoxdriver.FindElementByXPath('//*[@id="sp_formfield_v_textbox_1"]').SendKeys("Test textbox text")
+
+    #Textbox 2
+    Write-Verbose "Entering textbox 2 info"
+    $Firefoxdriver.FindElementByXPath('//*[@id="sp_formfield_v_textbox_2"]').SendKeys("Test textbox 2 text")
+
+    #Dropdown menu with textbox filter
+    Write-Verbose "Entering dropdown/textbox filter info"
+    $Firefoxdriver.FindElementByXPath('/html/body/div[1]/section/main/div/div/sp-page-row/div/div[1]/span/div/div/div[1]/div[1]/div/div[3]/form/div/sp-variable-layout/fieldset/div/div/div[10]/div/span/span/div/div/a').click()
+    $Firefoxdriver.FindElementByCssSelector('#select2-drop > div:nth-child(1) > input:nth-child(2)').sendkeys("dropdown filter text")
+        start-sleep -Seconds 1.5
+    #Sends enter key to accept selected filtered text
+    $Firefoxdriver.FindElementByCssSelector('#select2-drop > div:nth-child(1) > input:nth-child(2)').sendkeys([OpenQA.Selenium.Keys]::ENTER)
+
+    #endregion bulk of web work
+
+    Write-host "Loop $i complete up with user $($accountfullname)." -ForegroundColor Blue -BackgroundColor cyan
+
+    #interactive window to continue, CTR+BREAK to end - This has been added as this is a work in progress on a live webpage
+    if($i -le 0){Start-Process PowerShell {write-host 'Check the page and edit anything that''s missing. Press a key to continue, or CTR+BREAK in the ISE to end.';[void][System.Console]::ReadKey($true)} -wait;}
+    
+    #Hits the submit button
+    $Firefoxdriver.FindElementByXPath('/html/body/div[1]/section/main/div/div/sp-page-row/div/div[1]/span/div/div/div[1]/div[1]/div/div[4]/div/div/button').Click()
+    #break
+    }#end of foreach loop
+}#end of for loop
+#endregion 
+
+
+
+#cleanup - Utilized to exit Selenium. Multiple spawned session can cause issues. 
+
+Function Stop-Chromedriver {Get-Process -Name Chromedriver -ErrorAction SilentlyContinue | Stop-Process -ErrorAction SilentlyContinue}
+Function Stop-Firefoxdriver {Get-Process -Name Geckodriver -ErrorAction SilentlyContinue | Stop-Process -ErrorAction SilentlyContinue}
+$Firefoxdriver.Close() # Close selenium browser session method
+$Firefoxdriver.Quit() # End Firefoxdriver process method
+Stop-Firefoxdriver # Function to make double sure the Firefoxdriver process is done
+Stop-Chromedriver
